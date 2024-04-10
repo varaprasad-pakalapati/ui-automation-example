@@ -1,0 +1,157 @@
+name: $(rev:r)
+resources:
+  repositories:
+  - repository: self
+    clean: true
+trigger:
+  branches:
+    include:
+    - master
+variables:
+- name: RootPath
+  value: uiTests
+- name: ImageName
+  value: ui-tests
+- name: BuildSuffix
+  value: release
+- name: TenantTag
+  value: -uk
+- name: DockerRegistry
+  value: pbdockerregistry-on.azurecr.io
+- name: ConfigFile
+  value: $(RootPath)/$(ImageName).nuspec
+- name: Major
+  value: 1
+- name: Minor
+  value: 1
+- name: Patch
+  value: $[counter(format('{0}.{1}', variables['Major'], variables['Minor']), 0)]
+- name: OctopusProjectId
+  value: 'Projects-xxxx'
+- group: Dynamic-PR-ACI-Applications
+stages:
+- stage: Build
+  jobs:
+  - job: ''
+    displayName: Install dependencies and run cypress viewings e2e tests
+    pool:
+      vmImage: 'ubuntu-18.04'
+    steps:
+    - task: AssignBuildNumberNode@6
+      displayName: Assign Build Number
+      inputs:
+        BuildSuffix: $(BuildSuffix)
+    - task: Bash@3
+      displayName: Creating default .npmrc file
+      inputs:
+        targetType: inline
+        script: >
+          echo "registry=https://pkgs.dev.azure.com/purplebricks/_packaging/purplebricks-npm/npm/registry/
+
+          always-auth=true" >> $(RootPath)/.npmrc
+    - task: npmAuthenticate@0
+      displayName: Inject credentials into .npmrc file
+      inputs:
+        workingFile: $(RootPath)/.npmrc
+    - task: CopyFiles@1
+      displayName: 'Copy yarn.lock file'
+      inputs:
+        Contents: 'yarn.lock'
+        TargetFolder: $(RootPath)
+    - task: CmdLine@2
+      displayName: 'Delete Root Package JSON file'
+      inputs:
+        script: 'rm -f ./package.json'
+    - task: NodeTool@0
+      condition: True
+      displayName: 'Install Node to run Tests'
+      inputs:
+        versionSpec: '12.x'
+    - task: CmdLine@2
+      displayName: 'Run yarn install'
+      inputs:
+        script: cd $(RootPath) && yarn install
+      continueOnError: true
+    - task: CmdLine@2
+      condition: True
+      continueOnError: false
+      displayName: 'Cypress verify'
+      inputs:
+        script: cd $(RootPath) && yarn cy:verify
+    - task: CmdLine@2
+      condition: True
+      continueOnError: false
+      displayName: 'Link cypress-cucumber-preprocessor'
+      inputs:
+        script: cd $(RootPath) && npm link cypress-cucumber-preprocessor
+    - task: CmdLine@2
+      condition: True
+      continueOnError: true
+      displayName: 'Run_Cypress_tests'
+      inputs:
+        script: cd $(RootPath) && yarn cy:nightlybuild_viewings
+    - task: CmdLine@2
+      condition: True
+      continueOnError: true
+      displayName: 'Generate Test Report'
+      inputs:
+        script: cd $(RootPath) && yarn run generate:html:report_viewings
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifacts'
+      inputs:
+        PathtoPublish: $(RootPath)/test-report/html
+        ArtifactName: 'Test-Report'
+        publishLocation: 'Container'
+    - task: DeleteFiles@1
+      continueOnError: true
+      displayName: 'Delete node_modules'
+      inputs:
+        SourceFolder: ''
+        Contents: 'node_modules'
+    - task: ExtractPullRequestDetails@2
+      displayName: Extract pull request details
+      inputs:
+        teamProject: $(System.TeamProject)
+    - task: PowerShell@2
+      displayName: Post to Slack
+      env:
+        BUILD_ID: $(Build.BuildId)
+        BUILD_NUMBER: $(Build.BuildNumber)
+        BUILD_DEFINITION_NAME: $(Build.DefinitionName)
+        AGENT_JOBSTATUS: $(Agent.JobStatus)
+        SLACK_WEB_HOOK: $(SlackWebhook)
+        SLACK_USERNAME: 'automation-test-reports'
+        SLACK_CHANNEL: '#automation-test-reports'
+      inputs:
+        targetType: inline
+        script: |
+          $slackWebhook = $env:SLACK_WEB_HOOK
+          $buildNumber = $env:BUILD_NUMBER
+          $buildId = $env:BUILD_ID
+          $jobStatus = $env:AGENT_JOBSTATUS
+          $title = ($env:BUILD_DEFINITION_NAME).Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
+          $slackUserName = $env:SLACK_USERNAME
+          $slackchannel = $env:SLACK_CHANNEL
+
+          $artifactsUrlNotFormatted = "https://dev.azure.com/purplebricks/64aca767-932b-405a-8020-e93dbbf8f4dc/_apis/build/builds/$buildId/artifacts?artifactName=Test-Report&api-version=6.0&%24format=zip"
+          $artifactsUrl = [System.Web.HttpUtility]::UrlEncode($artifactsUrlNotFormatted)
+          Write-Output "BuildNumber: $($buildNumber)"
+          $slackMessage = ConvertTo-Json @{
+            username    = "$slackUserName";
+            channel     = "$slackchannel";
+            attachments = @(
+                @{
+                    pretext = "Automated Test Build 'Viewings Tests - <$buildId>' has completed with status '$jobStatus'. Please download test report for more details";
+                    fields  = @(
+                      @{
+                          title = "Test Report:";
+                          value = "$artifactsUrl";
+                      }
+                    )
+                  }
+              );
+          } -Depth 5
+          Write-Host $slackMessage
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $slackWebhook -Method Post -Body "payload=$slackMessage" -UseBasicParsing
+
