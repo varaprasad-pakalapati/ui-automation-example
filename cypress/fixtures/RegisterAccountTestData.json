@@ -1,0 +1,13 @@
+{
+  "firstName": "automationtest",
+  "lastName": "user",
+  "address": {
+    "street": "st john walk",
+    "city": "milton keynes",
+    "state": "milton keynes",
+    "zipcode": "660976"
+  },
+  "phoneNumber": "075588756875",
+  "ssn": "8667877878",
+  "password": "automation"
+}
