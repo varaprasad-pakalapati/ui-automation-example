@@ -1,0 +1,53 @@
+image:
+    name: cypress/browsers:node16.5.0-chrome94-ff93
+
+install-dependencies: &install-dependencies
+  step:
+    name: Install Dependencies
+    caches:
+        - node
+        - cypress
+    script:
+        - yarn install       
+
+e2e-tests: &e2e-tests
+ step:
+    name: Run E2E Tests
+    caches:
+        - node
+        - cypress
+    script:
+        - yarn run test:e2e:$ENVIRONMENT_NAME:$REGION:$TAG_NAME
+    artifacts:  
+        - cypress/test-results/*.html
+        - cypress/screenshots/**
+    after-script:   
+              - apt-get update && apt-get install -y gettext
+              - envsubst < cypress/test-results/payload.json > cypress/test-results/payloadUpdated.json
+              - pipe: atlassian/slack-notify:2.0.0
+                variables:
+                  WEBHOOK_URL: $SLACK_AUTOMATION_WEBHOOK_URL
+                  PAYLOAD_FILE: cypress/test-results/payloadUpdated.json        
+
+pipelines:
+  pull-requests:
+        '**':
+        - <<: *install-dependencies
+        - <<: *e2e-tests
+  custom: 
+        environment:     
+             - variables:
+               - name: ENVIRONMENT_NAME
+               - name: TAG_NAME
+               - name: REGION
+             - <<: *install-dependencies
+             - <<: *e2e-tests
+  branches:
+    master:     
+        - <<: *install-dependencies
+        - <<: *e2e-tests
+       
+definitions:
+    caches:
+        npm: $HOME/.npm
+        cypress: $HOME/.cache/Cypress
